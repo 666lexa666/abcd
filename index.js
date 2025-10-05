@@ -9,67 +9,68 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 4000;
 
-// Middlewares
 app.use(cors());
 app.use(express.json());
 
-// Supabase client с Service Role Key
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY; // В ENV
+
 const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-// Проверка Steam через Desslyhub API
-async function checkSteamLogin(steamLogin) {
-  const url = 'https://desslyhub.com/api/v1/service/steamtopup/check_login';
-  const options = {
-    method: 'POST',
-    headers: {
-      apikey: '40a2cbac635f46a280a9e9fd7a5c5b20',
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify({ username: steamLogin, amount: 1 }),
-  };
-
-  const res = await fetch(url, options);
-  return res.json();
-}
-
-// Маршрут для привязки Steam логина
 app.post('/link-steam', async (req, res) => {
   try {
-    const { steamLogin, userId } = req.body;
+    const { steamLogin, token } = req.body;
 
     if (!steamLogin || steamLogin.length < 3) {
       return res.status(400).json({ error: 'Steam логин должен содержать минимум 3 символа' });
     }
 
-    if (!userId) {
-      return res.status(400).json({ error: 'Не указан userId' });
+    if (!token) {
+      return res.status(401).json({ error: 'Необходима авторизация' });
     }
 
-    // Проверка через Desslyhub
-    const checkResult = await checkSteamLogin(steamLogin);
-
-    if (!checkResult.can_refill) {
-      return res.status(400).json({ error: 'Этот Steam логин нельзя использовать', details: checkResult });
+    // Проверяем токен пользователя через Supabase
+    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+    if (authError || !user) {
+      return res.status(401).json({ error: 'Неверный токен авторизации' });
     }
 
-    // Проверка, что логин ещё не используется
-    const { data: existing } = await supabase
+    // Проверяем, что логин ещё не привязан
+    const { data: profile, error: profileError } = await supabase
       .from('profiles')
-      .select('id')
-      .eq('steam_login', steamLogin)
-      .maybeSingle();
+      .select('steam_login')
+      .eq('id', user.id)
+      .single();
 
-    if (existing) {
-      return res.status(400).json({ error: 'Этот Steam логин уже используется другим пользователем' });
+    if (profileError) {
+      return res.status(500).json({ error: 'Ошибка при получении профиля' });
+    }
+
+    if (profile.steam_login) {
+      return res.status(400).json({ error: 'Steam логин уже привязан' });
+    }
+
+    // Проверяем внешний API Steam
+    const steamApiUrl = 'https://desslyhub.com/api/v1/service/steamtopup/check_login';
+    const steamRes = await fetch(steamApiUrl, {
+      method: 'POST',
+      headers: {
+        apikey: '40a2cbac635f46a280a9e9fd7a5c5b20',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ username: steamLogin, amount: 1 })
+    });
+
+    const steamJson = await steamRes.json();
+    if (!steamJson.can_refill) {
+      return res.status(400).json({ error: 'Этот Steam логин нельзя привязать', details: steamJson });
     }
 
     // Обновляем профиль пользователя
     const { error: updateError } = await supabase
       .from('profiles')
       .update({ steam_login: steamLogin })
-      .eq('id', userId);
+      .eq('id', user.id);
 
     if (updateError) {
       return res.status(500).json({ error: 'Ошибка при обновлении профиля' });
@@ -82,7 +83,6 @@ app.post('/link-steam', async (req, res) => {
   }
 });
 
-// Запуск сервера
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
