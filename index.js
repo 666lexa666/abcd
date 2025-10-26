@@ -3,7 +3,6 @@ import express from 'express';
 import { createClient } from '@supabase/supabase-js';
 import { v4 as uuidv4 } from 'uuid';
 import bodyParser from 'body-parser';
-import cors from 'cors';
 
 // Настройки Supabase
 const supabaseUrl = process.env.SUPABASE_URL || 'https://xyzcompany.supabase.co';
@@ -11,44 +10,34 @@ const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || 'your-service-role-
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 const app = express();
-app.use(cors());
 app.use(bodyParser.json());
 
 app.post('/api/order', async (req, res) => {
   try {
+    console.log('📥 Incoming request body:', req.body);
+
     const { steamId, amount, api_login, api_key } = req.body;
 
     if (!steamId || !amount || !api_login || !api_key) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
-    // Проверка соответствия api_login и api_key в api_clients
-    const { data: clientData, error: clientError } = await supabase
-      .from('api_clients')
-      .select('*')
-      .eq('api_login', api_login)
-      .eq('api_key', api_key)
-      .single();
-
-    if (clientError || !clientData) {
-      return res.status(403).json({ error: 'Invalid API credentials' });
-    }
+    // Делим сумму на 100
+    const amountCents = Number(amount) / 100;
 
     // Генерация уникальных идентификаторов
-    const operation_id = uuidv4();
-    const qr_id = uuidv4();
-    const qr_payload = `https://fake-qr.com/${qr_id}`;
+    const operationId = uuidv4();
+    const qrcId = uuidv4();
+    const payload = `https://fake-qr.com/${qrcId}`;
 
-    const processedAmount = Number(amount) / 100;
-
-    // Вставка в purchases_test
-    const { error: insertError } = await supabase.from('purchases_test').insert([
+    // Запись в базу данных
+    const { data, error } = await supabase.from('purchases_test').insert([
       {
-        id: operation_id,
-        amount: processedAmount,
+        id: operationId,
+        amount: amountCents,
         api_login,
-        qr_payload,
-        qr_id,
+        qr_payload: payload,
+        qr_id: qrcId,
         status: 'pending',
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
@@ -56,13 +45,22 @@ app.post('/api/order', async (req, res) => {
       },
     ]);
 
-    if (insertError) {
-      console.error('Supabase insert error:', insertError);
+    if (error) {
+      console.error('Supabase insert error:', error);
       return res.status(500).json({ error: 'Database error' });
     }
 
-    // Ответ
-    return res.json({ operation_id, qr_payload, qr_id });
+    const responsePayload = {
+      result: {
+        operation_id: operationId,
+        qr_id: qrcId,
+        qr_payload: payload,
+      },
+    };
+
+    console.log('📤 Response payload:', responsePayload);
+
+    return res.status(201).json(responsePayload);
   } catch (err) {
     console.error('Server error:', err);
     return res.status(500).json({ error: 'Internal server error' });
