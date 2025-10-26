@@ -39,11 +39,13 @@ app.post('/api/order', async (req, res) => {
     const qr_id = uuidv4();
     const qr_payload = `https://fake-qr.com/${qr_id}`;
 
+    const processedAmount = Number(amount) / 100;
+
     // Вставка в purchases_test
     const { error: insertError } = await supabase.from('purchases_test').insert([
       {
         id: operation_id,
-        amount,
+        amount: processedAmount,
         api_login,
         qr_payload,
         qr_id,
