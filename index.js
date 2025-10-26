@@ -1,88 +1,65 @@
+// index.js
 import express from 'express';
-import cors from 'cors';
-import fetch from 'node-fetch';
 import { createClient } from '@supabase/supabase-js';
-import dotenv from 'dotenv';
+import { v4 as uuidv4 } from 'uuid';
+import bodyParser from 'body-parser';
 
-dotenv.config();
+// Настройки Supabase
+const supabaseUrl = process.env.SUPABASE_URL || 'https://xyzcompany.supabase.co';
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || 'your-service-role-key';
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 const app = express();
-const PORT = process.env.PORT || 4000;
+app.use(bodyParser.json());
 
-app.use(cors());
-app.use(express.json());
-
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY; // В ENV
-
-const supabase = createClient(supabaseUrl, supabaseServiceKey);
-
-app.post('/link-steam', async (req, res) => {
+app.post('/api/order', async (req, res) => {
   try {
-    const { steamLogin, token } = req.body;
+    const { steamId, amount, api_login, api_key } = req.body;
 
-    if (!steamLogin || steamLogin.length < 3) {
-      return res.status(400).json({ error: 'Steam логин должен содержать минимум 3 символа' });
+    if (!steamId || !amount || !api_login || !api_key) {
+      return res.status(400).json({ error: 'Missing required fields' });
     }
 
-    if (!token) {
-      return res.status(401).json({ error: 'Необходима авторизация' });
+    // Генерация уникальных идентификаторов
+    const operation_id = uuidv4();
+    const qr_id = uuidv4();
+    const qr_payload = `https://fake-qr.com/${qr_id}`;
+
+    // Запись в базу данных
+    const { data, error } = await supabase
+      .from('purchases_test')
+      .insert([
+        {
+          id: operation_id,
+          amount,
+          api_login,
+          qr_payload,
+          qr_id,
+          status: 'pending',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          commit: null,
+        },
+      ]);
+
+    if (error) {
+      console.error('Supabase insert error:', error);
+      return res.status(500).json({ error: 'Database error' });
     }
 
-    // Проверяем токен пользователя через Supabase
-    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
-    if (authError || !user) {
-      return res.status(401).json({ error: 'Неверный токен авторизации' });
-    }
-
-    // Проверяем, что логин ещё не привязан
-    const { data: profile, error: profileError } = await supabase
-      .from('profiles')
-      .select('steam_login')
-      .eq('id', user.id)
-      .single();
-
-    if (profileError) {
-      return res.status(500).json({ error: 'Ошибка при получении профиля' });
-    }
-
-    if (profile.steam_login) {
-      return res.status(400).json({ error: 'Steam логин уже привязан' });
-    }
-
-    // Проверяем внешний API Steam
-    const steamApiUrl = 'https://desslyhub.com/api/v1/service/steamtopup/check_login';
-    const steamRes = await fetch(steamApiUrl, {
-      method: 'POST',
-      headers: {
-        apikey: '40a2cbac635f46a280a9e9fd7a5c5b20',
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ username: steamLogin, amount: 1 })
+    // Отправка ответа
+    return res.json({
+      operation_id,
+      qr_payload,
+      qr_id,
     });
-
-    const steamJson = await steamRes.json();
-    if (!steamJson.can_refill) {
-      return res.status(400).json({ error: 'Этот Steam логин нельзя привязать', details: steamJson });
-    }
-
-    // Обновляем профиль пользователя
-    const { error: updateError } = await supabase
-      .from('profiles')
-      .update({ steam_login: steamLogin })
-      .eq('id', user.id);
-
-    if (updateError) {
-      return res.status(500).json({ error: 'Ошибка при обновлении профиля' });
-    }
-
-    return res.json({ success: true });
   } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: 'Внутренняя ошибка сервера' });
+    console.error('Server error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
   }
 });
 
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
